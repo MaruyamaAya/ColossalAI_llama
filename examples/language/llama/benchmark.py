@@ -1,18 +1,14 @@
 import argparse
-import os
-
 import resource
-from contextlib import contextmanager, nullcontext
-import time
-
+from contextlib import nullcontext
 
 import torch
 from attn import SUPPORT_XFORMERS, replace_xformers
-from performance_evaluator import PerformanceEvaluator, Timer
+from data_utils import RandomDataset
+from model_utils import format_numel_str, get_model_numel
+from performance_evaluator import PerformanceEvaluator
 from torch.distributed.fsdp.fully_sharded_data_parallel import CPUOffload, MixedPrecision
-from torch.utils.data import Dataset
 from tqdm import tqdm
-from transformers.modeling_utils import no_init_weights
 from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.models.llama.modeling_llama import LlamaForCausalLM
 
@@ -24,9 +20,6 @@ from colossalai.lazy import LazyInitContext
 from colossalai.nn.optimizer import HybridAdam
 from colossalai.utils import get_current_device
 from colossalai.zero.gemini.placement_policy import AutoPlacementPolicy, ConstPlacementPolicy
-
-from data_utils import RandomDataset
-from model_utils import get_model_numel, format_numel_str, low_precision_init
 
 # ==============================
 # Constants
@@ -40,6 +33,7 @@ MODEL_CONFIGS = {
     '70b': LlamaConfig(hidden_size=8192, intermediate_size=28672, num_hidden_layers=80, num_attention_heads=64, num_key_value_heads=8,
                        initializer_range=0.02, vocab_size=32000),
 }
+
 
 def main():
     # ==============================
@@ -62,6 +56,7 @@ def main():
     parser.add_argument('-x', '--xformers', action='store_true', help='Use xformers')
     parser.add_argument('--tp', type=int, default=1, help='Tensor parallel size')
     parser.add_argument('--pp', type=int, default=1, help='Pipeline parallel size')
+    parser.add_argument('--edp', type=int, default=1, help='Extra data parallel size')
     parser.add_argument('--mbs', type=int, default=1)
     parser.add_argument('--zero', type=int, default=0)
     args = parser.parse_args()
@@ -78,11 +73,11 @@ def main():
     use_empty_init = True
     if args.plugin == 'gemini':
         AutoPlacementPolicy.set_warmup_non_model_data_ratio(args.warmup_ratio)
-        plugin = GeminiPlugin(placement_policy='auto', precision='bf16')
+        plugin = GeminiPlugin(placement_policy='auto', precision='bf16', extra_dp_size=args.edp)
     elif args.plugin == 'gemini_cuda':
-        plugin = GeminiPlugin(placement_policy='cuda', precision='bf16')
+        plugin = GeminiPlugin(placement_policy='cuda', precision='bf16', extra_dp_size=args.edp)
     elif args.plugin == 'gemini_cpu':
-        plugin = GeminiPlugin(placement_policy='cpu', precision='bf16')
+        plugin = GeminiPlugin(placement_policy='cpu', precision='bf16', extra_dp_size=args.edp)
     elif args.plugin == 'const':
         ConstPlacementPolicy.set_const_memory_boundary(args.memory_limit)
         plugin = GeminiPlugin(placement_policy='const', precision='bf16')
@@ -173,7 +168,6 @@ def main():
     coordinator.print_on_master(f'Booster init max CUDA memory: {torch.cuda.max_memory_allocated()/1024**2:.2f} MB')
     coordinator.print_on_master(
         f'Booster init max CPU memory: {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1024:.2f} MB')
-
 
     if isinstance(plugin, ThreeDimParallelPlugin) and args.pp > 1:
         data_iter = iter(dataloader)
