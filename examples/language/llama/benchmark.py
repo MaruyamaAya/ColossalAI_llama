@@ -37,6 +37,8 @@ MODEL_CONFIGS = {
     '13b': LlamaConfig(hidden_size=5120, intermediate_size=13760, num_hidden_layers=40, num_attention_heads=40),
     '30b': LlamaConfig(hidden_size=6656, intermediate_size=17888, num_hidden_layers=60, num_attention_heads=52),
     '65b': LlamaConfig(hidden_size=8192, intermediate_size=22016, num_hidden_layers=80, num_attention_heads=64),
+    '70b': LlamaConfig(hidden_size=8192, intermediate_size=28672, num_hidden_layers=80, num_attention_heads=64, num_key_value_heads=8,
+                       initializer_range=0.02, vocab_size=32000),
 }
 
 def main():
